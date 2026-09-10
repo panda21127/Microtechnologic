@@ -44,12 +44,33 @@ def get_shipment(shipment_id: str) -> Shipment:
 
 @app.post("/shipments", response_model=Shipment, status_code=status.HTTP_201_CREATED)
 def create_shipment(payload: ShipmentCreate) -> Shipment:
-    # TODO: создать отправление; order_id должен быть уникальным.
-    raise HTTPException(status_code=501, detail="Implement create_shipment")
+    
+    if (store != None):
+        for shape in store.values():
+            if shape.order_id == payload.order_id:
+                raise HTTPException(status_code=407, detail="Order_id is already created")
+    
+    shipmentCreate = Shipment(
+        id = str(uuid4()),
+        order_id = payload.order_id,
+        destination = payload.destination,
+        status = 'created'
+    )
+
+    store[shipmentCreate.id]=shipmentCreate
+    return shipmentCreate
 
 
 @app.post("/shipments/{shipment_id}/dispatch", response_model=Shipment)
 def dispatch_shipment(shipment_id: str) -> Shipment:
-    # TODO: перевести created -> in_transit; остальные состояния вернуть как 409.
-    raise HTTPException(status_code=501, detail="Implement dispatch_shipment")
+    shipmentCreate = store.get(shipment_id)
+    if shipmentCreate is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if shipmentCreate.status != "created":
+        raise HTTPException(status_code=409, detail="Product is already created")
+
+    shimpered = shipmentCreate.model_copy(update = {'status' : 'in_transit'})
+    store[shipment_id] = shimpered
+    return shimpered
+
 
