@@ -1,7 +1,9 @@
 import os
 from typing import Literal
 from uuid import uuid4
+from enum import StrEnum
 
+from time import perf_counter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -15,6 +17,14 @@ app.add_middleware(
     allow_methods=[""],
     allow_headers=[""],
 )
+
+class ShipmentStatus(StrEnum):
+    CREATED = "created"
+    IN_TRANSIT = "in_transit"
+    DELIVERED = "delivered"
+
+class ShipmentPatch(BaseModel):
+    status: ShipmentStatus
 
 class ShipmentCreate(BaseModel):
     order_id: str = Field(min_length=1)
@@ -30,15 +40,46 @@ store: dict[str, Shipment] = {
     "shipment-001": Shipment(id="shipment-001", order_id="order-77", destination="Москва, Зеленоград")
 }
 
+@app.middleware("http")
+async def add_diagnostic_headers(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid4()))
+    started = perf_counter()
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Process-Time-ms"] = (
+    f"{(perf_counter() - started) * 1000:.2f}"
+    )
+    return response
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": SERVICE_NAME, "version": SERVICE_VERSION}
 
+# @app.get("/shipments", response_model=list[Shipment], tags=["shipments"])
+# def list_shipments(
+#  shipment_status: Optional[ShipmentStatus] = Query(None, alias="status"),
+#  new_order_id: Optional[str] = Query(None, min_length=1),
+#  ) -> list[Shipment]:
+#     shipments = list(store.values())
+#     if shipment_status is not None:
+#         shipments = [sh for sh in shipments if sh.status == shipment_status]
+#     if new_order_id is not None:
+#         shipments = [sh for sh in shipments if sh.order_id == new_order_id]
+#     return shipments
 
 @app.get("/shipments", response_model=list[Shipment])
-def list_shipments() -> list[Shipment]:
-    return list(store.values())
+def list_shipments(
+    status: Annotated[ShipmentStatus | None, Query()] = None,
+    order_id: Annotated[str | None, Query()] = None,
+) -> list[Shipment]:
+    shipments = list(store.values())
+    if status is not None:
+        return [s for s in shipments if s.status == status]
+
+    if order_id is not None:
+        return [s for s in shipments if s.order_id == order_id]
+
+    return shipments
 
 @app.get("/shipments/{shipment_id}", response_model=Shipment)
 def get_shipment(shipment_id: str) -> Shipment:
@@ -63,6 +104,7 @@ def create_shipment(payload: ShipmentCreate) -> Shipment:
     )
 
     store[shipmentCreate.id]=shipmentCreate
+    response.headers["Location"] = f"/shipments/{shipmentCreate.id}"
     return shipmentCreate
 
 
@@ -81,34 +123,16 @@ def dispatch_shipment(shipment_id: str) -> Shipment:
 
 # 2Lab
 
-# @app.get("/shipments", response_model=list[Shipment], tags=["shipments"])
-# def list_shipments(
-#  shipment_status: Optional[str] = Query(None, alias="status"),
-#  new_order_id: Optional[str] = Query(None, min_length=1),
-#  ) -> list[Shipment]:
-#     shipments = list(store.values())
-#     if shipment_status is not None:
-#         shipments = [sh for sh in shipments if sh.status == shipment_status]
-#     if new_order_id is not None:
-#         shipments = [sh for sh in shipments if sh.order_id == new_order_id]
-#     return shipments
-
-
-# class ShipmentCreate(BaseModel):
-#     order_id: Optional[str] = Query(None, min_length=1) #Field(min_length=1)
-#     destination: Optional[str] = Query(None, min_length=5, max_length=240)#Field(min_length=5, max_length=240)
-
-
-# @app.patch("/shipments/{shipment_id}", response_model=Shipment)
-# def patch_shipment(shipment_id: str, payload: ShipmentCreate) -> Shipment:
-#     shipment = store.get(shipment_id)
-#     if shipment is None:
-#         raise HTTPException(404, "Shipment not found")
-#     if shipment.status != "created":
-#         raise HTTPException(409, "Published shipment cannot be edited")
-#     changes = payload.model_dump(exclude_unset=True)
-#     if not changes:
-#         raise HTTPException(400, "At least one field is required")
-#     updated = shipment.model_copy(update=changes)
-#     store[shipment_id] = updated
-#     return updated
+@app.patch("/shipments/{shipment_id}", response_model=Shipment)
+def patch_shipment(shipment_id: str, payload: ShipmentPatch) -> Shipment:
+    shipment = store.get(shipment_id)
+    if shipment is None:
+        raise HTTPException(404, "Shipment not found")
+    if shipment.status != "created":
+        raise HTTPException(409, "Published shipment cannot be edited")
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(400, "At least one field is required")
+    updated = shipment.model_copy(update=changes)
+    store[shipment_id] = updated
+    return updated
