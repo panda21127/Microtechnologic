@@ -2,22 +2,28 @@ import os
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 SERVICE_NAME = os.getenv("SERVICE_NAME", "shipment-service")
 SERVICE_VERSION = os.getenv("SERVICE_VERSION", "0.1.0")
 app = FastAPI(title=SERVICE_NAME, version=SERVICE_VERSION)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_methods=[""],
+    allow_headers=[""],
+)
 
 class ShipmentCreate(BaseModel):
     order_id: str = Field(min_length=1)
     destination: str = Field(min_length=5, max_length=240)
 
-
 class Shipment(ShipmentCreate):
     id: str
     status: Literal["created", "in_transit", "delivered"] = "created"
+
 
 
 store: dict[str, Shipment] = {
@@ -34,7 +40,6 @@ def health() -> dict[str, str]:
 def list_shipments() -> list[Shipment]:
     return list(store.values())
 
-
 @app.get("/shipments/{shipment_id}", response_model=Shipment)
 def get_shipment(shipment_id: str) -> Shipment:
     if shipment_id not in store:
@@ -48,7 +53,7 @@ def create_shipment(payload: ShipmentCreate) -> Shipment:
     if (store != None):
         for shape in store.values():
             if shape.order_id == payload.order_id:
-                raise HTTPException(status_code=407, detail="Order_id is already created")
+                raise HTTPException(status_code=418, detail="Order_id is already created")
     
     shipmentCreate = Shipment(
         id = str(uuid4()),
@@ -74,3 +79,36 @@ def dispatch_shipment(shipment_id: str) -> Shipment:
     return shimpered
 
 
+# 2Lab
+
+# @app.get("/shipments", response_model=list[Shipment], tags=["shipments"])
+# def list_shipments(
+#  shipment_status: Optional[str] = Query(None, alias="status"),
+#  new_order_id: Optional[str] = Query(None, min_length=1),
+#  ) -> list[Shipment]:
+#     shipments = list(store.values())
+#     if shipment_status is not None:
+#         shipments = [sh for sh in shipments if sh.status == shipment_status]
+#     if new_order_id is not None:
+#         shipments = [sh for sh in shipments if sh.order_id == new_order_id]
+#     return shipments
+
+
+# class ShipmentCreate(BaseModel):
+#     order_id: Optional[str] = Query(None, min_length=1) #Field(min_length=1)
+#     destination: Optional[str] = Query(None, min_length=5, max_length=240)#Field(min_length=5, max_length=240)
+
+
+# @app.patch("/shipments/{shipment_id}", response_model=Shipment)
+# def patch_shipment(shipment_id: str, payload: ShipmentCreate) -> Shipment:
+#     shipment = store.get(shipment_id)
+#     if shipment is None:
+#         raise HTTPException(404, "Shipment not found")
+#     if shipment.status != "created":
+#         raise HTTPException(409, "Published shipment cannot be edited")
+#     changes = payload.model_dump(exclude_unset=True)
+#     if not changes:
+#         raise HTTPException(400, "At least one field is required")
+#     updated = shipment.model_copy(update=changes)
+#     store[shipment_id] = updated
+#     return updated
