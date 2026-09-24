@@ -5,12 +5,22 @@ from enum import StrEnum
 
 from time import perf_counter
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 SERVICE_NAME = os.getenv("SERVICE_NAME", "shipment-service")
 SERVICE_VERSION = os.getenv("SERVICE_VERSION", "0.1.0")
 app = FastAPI(title=SERVICE_NAME, version=SERVICE_VERSION)
+
+# server einee
+# Ввести на 8000 порту, другой на 8001
+# server proxy_pass http::localhost
+# Написать заголовок который вытягивает переменную окружения и добавляется в заголовок x-upstream
+# Определить через unicorn
+# Настроить балансировку
+
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -55,18 +65,6 @@ async def add_diagnostic_headers(request: Request, call_next):
 def health() -> dict[str, str]:
     return {"status": "ok", "service": SERVICE_NAME, "version": SERVICE_VERSION}
 
-# @app.get("/shipments", response_model=list[Shipment], tags=["shipments"])
-# def list_shipments(
-#  shipment_status: Optional[ShipmentStatus] = Query(None, alias="status"),
-#  new_order_id: Optional[str] = Query(None, min_length=1),
-#  ) -> list[Shipment]:
-#     shipments = list(store.values())
-#     if shipment_status is not None:
-#         shipments = [sh for sh in shipments if sh.status == shipment_status]
-#     if new_order_id is not None:
-#         shipments = [sh for sh in shipments if sh.order_id == new_order_id]
-#     return shipments
-
 @app.get("/shipments", response_model=list[Shipment])
 def list_shipments(
     status: Annotated[ShipmentStatus | None, Query()] = None,
@@ -89,7 +87,7 @@ def get_shipment(shipment_id: str) -> Shipment:
 
 
 @app.post("/shipments", response_model=Shipment, status_code=status.HTTP_201_CREATED)
-def create_shipment(payload: ShipmentCreate) -> Shipment:
+def create_shipment(payload: ShipmentCreate, response: Response) -> Shipment:
     
     if (store != None):
         for shape in store.values():
@@ -120,8 +118,6 @@ def dispatch_shipment(shipment_id: str) -> Shipment:
     store[shipment_id] = shimpered
     return shimpered
 
-
-# 2Lab
 
 @app.patch("/shipments/{shipment_id}", response_model=Shipment)
 def patch_shipment(shipment_id: str, payload: ShipmentPatch) -> Shipment:
