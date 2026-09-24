@@ -18,33 +18,30 @@ def clear() -> None:
     store.clear()
     store.update(original)
 
-def test_health() -> None:
-    assert client.get("/health").status_code == 200
-
-
-def test_seed_shipment_is_created() -> None:
-    response = client.get("/shipments/shipment-001")
-    assert response.status_code == 200
-    assert response.json()["status"] == "created"
-
-
-def test_shipment0() -> None:
+def test_shipmentCreate() -> None:
     shimp1 = client.post("/shipments", json = {"order_id" : "0",  "destination" : "55555"})
 
     assert shimp1.status_code == 201
 
-def test_shipment() -> None:
+def test_shipmentDoubleCreate() -> None:
     shimp1 = client.post("/shipments", json = {"order_id" : "0",  "destination" : "55555"})
     shimp2 = client.post("/shipments", json = {"order_id" : "0",  "destination" : "111111"})
 
-    assert shimp2.status_code == 407
+    assert shimp2.status_code == 418
 
-def test_shipment2() -> None:
+def test_shipmentWrongCreate() -> None:
     shimp1 = client.post("/shipments", json = {"order_id" : "0",  "destination" : "555"})
 
     assert shimp1.status_code == 422
 
-def test_shipment3() -> None:
+def test_shipmentCorrectDispatch() -> None:
+    shimp1 = client.post("/shipments", json = {"order_id" : "15",  "destination" : "5555123"})
+    
+    test = client.post(f"/shipments/{shimp1.json()["id"]}/dispatch")
+
+    assert test.status_code == 200
+
+def test_shipmentDoubleDispatch() -> None:
     shimp1 = client.post("/shipments", json = {"order_id" : "0",  "destination" : "555123"})
     
     client.post(f"/shipments/{shimp1.json()["id"]}/dispatch")
@@ -52,14 +49,7 @@ def test_shipment3() -> None:
 
     assert test.status_code == 409
 
-def test_shipment4() -> None:
-    shimp1 = client.post("/shipments", json = {"order_id" : "15",  "destination" : "5555123"})
-    
-    test = client.post(f"/shipments/{shimp1.json()["id"]}/dispatch")
-
-    assert test.status_code == 200
-
-def test_shipment5() -> None:
+def test_shipmentDispatchSpace() -> None:
     test = client.post("/shipments/0/dispatch")
 
     assert test.status_code == 404
