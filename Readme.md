@@ -104,10 +104,7 @@ def create_shipment(payload: ShipmentCreate, response: Response) -> Shipment:
     return shipmentCreate
 ```
 
-## 5. Тестирование
-
-
-## 6. HTTPS и TLS termination
+## 5. HTTPS и TLS termination
 Для запуска по HTTPS сгенерирован самоподписанный сертификат:
 ```bash
 >> mkdir -p certs
@@ -120,6 +117,13 @@ def create_shipment(payload: ShipmentCreate, response: Response) -> Shipment:
 >> chmod 600 certs/dev-key.pem
 ```
 Сервис запущен с флагами `--ssl-keyfile` и `--ssl-certfile` на порту 8443. Проверка осуществляется командой `curl -k -v https://127.0.0.1:8443/docs`. Флаг `-k` используется только для учебного самоподписанного сертификата.
+
+
+## 6. Тестирование
+
+Тесты проверяют не только JSON, но и HTTP-контракт. Хранилище восстанавливается fixtureфункцией, чтобы тесты не зависели от порядка.
+
+![alt text](docs/Test.png)
 
 ## 7. Ответы на контрольные вопросы
 
@@ -139,7 +143,37 @@ def create_shipment(payload: ShipmentCreate, response: Response) -> Shipment:
 14. **X-Forwarded-*:** Клиент может подделать эти заголовки. Доверять им можно только от известного reverse proxy.
 15. **HTTP между Nginx и FastAPI:** Допустим на localhost или в изолированной доверенной сети. В остальных случаях требуется повторное шифрование (TLS bridging).
 
-## 8. Вывод
+## 8. NGINX
+
+**Балансировка и запуск**
+
+1.
+
+Каким-то чудом установил nginx на codespace
+
+2.
+
+sudo nginx -t
+
+sudo nginx
+
+nano /etc/nginx/nginx.conf
+
+3.
+
+uvicorn main:app --host 127.0.0.1 --port 8000 \
+ --proxy-headers --forwarded-allow-ips=127.0.0.1
+
+4.
+
+uvicorn main:app --host 127.0.0.1 --port 8001 \
+ --proxy-headers --forwarded-allow-ips=127.0.0.1
+
+5.
+
+curl -k -v https://127.0.0.1:8443/health
+
+## 9. Вывод
 В ходе Лабораторной работы №2 был расширен функционал сервиса отправлений. Реализованы query-фильтры для коллекции, частичное изменение ресурса через PATCH и корректная обработка создания ресурса с заголовком `Location`. 
 
 Сервис успешно запущен по HTTPS с использованием самоподписанного сертификата. Написаны и пройдены автотесты, подтверждающие соблюдение HTTP-контракта.

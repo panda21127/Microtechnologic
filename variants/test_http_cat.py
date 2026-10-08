@@ -19,6 +19,11 @@ def clear() -> None:
     store.update(original)
 
 
+def test_request_id_is_returned(): 
+    response = client.get("/health", headers={"X-Request-ID": "lab2-check"}) 
+    assert response.headers["x-request-id"] == "lab2-check" 
+    assert float(response.headers["x-process-time-ms"]) >= 0
+
 def test_filter_by_status(): 
     response = client.get("/shipments", params={"status": "created"}) 
     assert response.status_code == 200 
@@ -28,8 +33,3 @@ def test_creation_returns_location_header():
     response = client.post("/shipments", json = {"order_id" : "123",  "destination" : "55555"})
     assert response.status_code == 201 
     assert response.headers["location"] == f"/shipments/{response.json()['id']}"  
-
-def test_request_id_is_returned(): 
-    response = client.get("/health", headers={"X-Request-ID": "lab2-check"}) 
-    assert response.headers["x-request-id"] == "lab2-check" 
-    assert float(response.headers["x-process-time-ms"]) >= 0

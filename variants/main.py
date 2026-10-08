@@ -20,8 +20,6 @@ app = FastAPI(title=SERVICE_NAME, version=SERVICE_VERSION)
 # Определить через unicorn
 # Настроить балансировку
 
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_methods=[""],
