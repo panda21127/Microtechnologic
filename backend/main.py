@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, String, create_engine, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
+
 SERVICE_NAME = os.getenv("SERVICE_NAME", "shipment-service")
 SERVICE_VERSION = os.getenv("SERVICE_VERSION", "0.1.0")
 
@@ -24,7 +25,11 @@ DATABASE_URL = (
     f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 )
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    connect_args={"connect_timeout": 5},
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -86,9 +91,34 @@ def to_dto(row: ShipmentORM) -> Shipment:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Для учебной работы допустимо. В production нужны миграции Alembic.
-    Base.metadata.create_all(bind=engine)
+    import socket
+    print(f"LIFESPAN: DB target {DB_HOST}:{DB_PORT}/{DB_NAME} user={DB_USER}", flush=True)
+
+    try:
+        ip = socket.gethostbyname(DB_HOST)
+        print(f"LIFESPAN: DNS OK {DB_HOST} -> {ip}", flush=True)
+    except Exception as exc:
+        print(f"LIFESPAN: DNS FAILED {exc}", flush=True)
+        raise
+
+    try:
+        s = socket.create_connection((DB_HOST, int(DB_PORT)), timeout=5)
+        s.close()
+        print("LIFESPAN: TCP OK", flush=True)
+    except Exception as exc:
+        print(f"LIFESPAN: TCP FAILED {exc}", flush=True)
+        raise
+
+    try:
+        print("LIFESPAN: create_all ->", flush=True)
+        Base.metadata.create_all(bind=engine)
+        print("LIFESPAN: create_all OK", flush=True)
+    except Exception as exc:
+        print(f"LIFESPAN: create_all FAILED {type(exc).__name__}: {exc}", flush=True)
+        raise
+
     yield
+    print("LIFESPAN: shutdown", flush=True)
 
 
 app = FastAPI(title=SERVICE_NAME, version=SERVICE_VERSION, lifespan=lifespan)
