@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Отправления</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main>
+    <h1>Отправления</h1>
+
+    <form id="create-form">
+      <input name="order_id" placeholder="order_id" required>
+      <input name="destination" placeholder="destination" required minlength="5">
+      <button type="submit">Создать</button>
+    </form>
+
+    <p id="status"></p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Order</th>
+          <th>Destination</th>
+          <th>Status</th>
+          <th>Действие</th>
+        </tr>
+      </thead>
+      <tbody id="list"></tbody>
+    </table>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,179 +1,408 @@
-# 2 Лабораторная работа
-#### Сетевое взаимодействие микросервиса:
-#### OSI, HTTP/HTTPS и REST API
-#### Дисциплина: «Микросервисная архитектура»
+# Лабораторная работа №3
+## Контейнеризация микросервисного приложения, SQL-хранилище и Docker Compose
+### Дисциплина: «Микросервисная архитектура»
 
 ## Вариант
-![alt text](docs/{78B04859-33EB-4267-8F4F-0D653167A757}.png)
+**Вариант 5. Отправления (`shipments`).**
+Frontend: список отправлений, создание отправления, предметная команда «отправить» (`created → in_transit`).
 
-**Цель работы:** Связать теорию уровней OSI, работу HTTP/HTTPS и ограничения REST с наблюдаемым поведением реального API. Научиться проектировать фильтры, частичное изменение ресурса (PATCH), возвращать корректные статусы и заголовки, а также запускать сервис по HTTPS.
+**Цель работы:** освоить контейнеризацию backend/frontend, подключить PostgreSQL, собрать единый стек через Docker Compose, сохранить REST-контракт ЛР №2 и обеспечить единственную внешнюю точку входа через Nginx на `http://localhost:8080`.
 
-## 2. Схема пути запроса
-**Клиент → IP/порт → TCP/TLS → HTTP → FastAPI-обработчик**
+## 1. Целевая архитектура
 
-| Уровень OSI | Компонент | Что видит разработчик |
-| :--- | :--- | :--- |
-| 7. Прикладной | HTTP, JSON, REST | Метод, URI, код статуса, тело запроса/ответа |
-| 6. Представления | TLS | Шифрование канала (HTTPS) |
-| 4. Транспортный | TCP | Соединение, порты 8000 (HTTP) и 8443 (HTTPS) |
-| 3. Сетевой | IP | Адрес 127.0.0.1 (loopback) |
+| Контейнер | Роль | Сети | Порт хоста |
+|---|---|---|---|
+| `proxy` | Nginx: единая точка входа | `edge` | `8080:80` |
+| `frontend` | Статический HTML/CSS/JS | `edge` | нет |
+| `backend` | FastAPI + SQLAlchemy + PostgreSQL | `edge`, `data` | нет |
+| `db` | PostgreSQL + именованный том | `data` | нет |
 
-## 3. Таблица маршрутов
+Схема запросов:
 
-| Метод | URI | Входные данные | Успешный статус | Ошибки |
-| :--- | :--- | :--- | :--- | :--- |
-| GET | `/health` | — | 200 OK | — |
-| GET | `/shipments` | Query: `status`, `order_id` | 200 OK | 422 (невалидный status) |
-| GET | `/shipments/{id}` | Path: `id` | 200 OK | 404 Not Found |
-| POST | `/shipments` | JSON: `order_id`, `destination` | 201 Created + `Location` | 418 Conflict (дубликат `order_id`), 422 |
-| POST | `/shipments/{id}/dispatch` | Path: `id` | 200 OK | 404, 409 (неверное состояние) |
-| PATCH | `/shipments/{id}` | JSON: `status` | 200 OK | 400, 404, 409 |
-
-## 4. Реализация ключевых механизмов
-
-### 4.1. Query-фильтры (GET /shipments)
-Реализована фильтрация по статусу (`status`) и номеру заказа (`order_id`). Параметры опциональны, что позволяет комбинировать их.
-
-```python
-@app.get("/shipments", response_model=list[Shipment])
-def list_shipments(
-    status: Annotated[ShipmentStatus | None, Query()] = None,
-    order_id: Annotated[str | None, Query()] = None,
-) -> list[Shipment]:
-    shipments = list(store.values())
-    if status is not None:
-        shipments = [s for s in shipments if s.status == status]
-    if order_id is not None:
-        shipments = [s for s in shipments if s.order_id == order_id]
-    return shipments
+```text
+Браузер → proxy:80 → /        → frontend:80
+Браузер → proxy:80 → /api/*   → backend:8000/*
+backend → db:5432             → SQL-запросы
 ```
 
-### 4.2. Частичное изменение (PATCH)
-Метод `PATCH /shipments/{id}` позволяет изменить статус отправления. Согласно варианту, изменение разрешено **только** если текущий статус — `created`. Если тело пустое, возвращается 400. Если статус не `created`, возвращается 409.
+Ограничения:
+- в финальном состоянии `docker compose ps` показывает ровно 4 долгоживущих контейнера;
+- `frontend` не содержит `http://localhost:8000`, все запросы идут на относительный `/api/...`;
+- `backend` не хранит рабочие данные в глобальном `dict/list`, данные читаются из PostgreSQL;
+- `db` не публикует `5432` на хост;
+- `proxy` не подключается к сети `data`;
+- пароли не хранятся в Dockerfile, исходном коде и образах;
+- контейнеры не запускаются в `privileged` и не монтируют Docker socket.
 
-```python
-@app.patch("/shipments/{shipment_id}", response_model=Shipment)
-def patch_shipment(shipment_id: str, payload: ShipmentPatch) -> Shipment:
-    shipment = store.get(shipment_id)
-    if shipment is None:
-        raise HTTPException(404, "Shipment not found")
-    if shipment.status != "created":
-        raise HTTPException(409, "Only shipments in 'created' status can be edited")
-    
-    changes = payload.model_dump(exclude_unset=True)
-    if not changes:
-        raise HTTPException(400, "At least one field is required")
-        
-    updated = shipment.model_copy(update=changes)
-    store[shipment_id] = updated
-    return updated
+## 2. Структура проекта
+
+```text
+project/
+  backend/
+    main.py
+    requirements.txt
+    Dockerfile
+    .dockerignore
+  frontend/
+    index.html
+    app.js
+    styles.css
+    Dockerfile
+    .dockerignore
+  proxy/
+    nginx.conf
+  compose.yaml
+  .env.example
+  .gitignore
+  README.md
 ```
 
-### 4.3. Диагностические заголовки (Middleware)
-Middleware перехватывает все запросы, добавляет `X-Request-ID` (из запроса или сгенерированный) и вычисляет время обработки `X-Process-Time-ms`.
+## 3. Пошаговая инструкция
+
+### 3.1. Backend: SQLAlchemy + PostgreSQL
+
+Файл `backend/main.py` — пример с сохранением контракта ЛР №2. Замените свой `main.py` или адаптируйте код:
 
 ```python
-@app.middleware("http")
-async def add_diagnostic_headers(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID", str(uuid4()))
-    started = perf_counter()
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    response.headers["X-Process-Time-ms"] = f"{(perf_counter() - started) * 1000:.2f}"
-    return response
+SERVICE_NAME = os.getenv("SERVICE_NAME", "shipment-service")
+SERVICE_VERSION = os.getenv("SERVICE_VERSION", "0.1.0")
+
+DB_HOST = os.getenv("DB_HOST", "db")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "appdb")
+DB_USER = os.getenv("DB_USER", "appuser")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "change_me")
+
+DATABASE_URL = (
+    f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+)
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 ```
 
-### 4.4. Создание ресурса с Location (POST /shipments)
-При успешном создании возвращается 201 и заголовок `Location`, указывающий на URI нового ресурса. *Примечание: в вашем коде необходимо добавить параметр `response: Response` в функцию `create_shipment`, иначе код вызовет ошибку. Также рекомендуется заменить код 418 на 409 для соответствия стандартам.*
+### 3.2. Frontend
 
-```python
-@app.post("/shipments", response_model=Shipment, status_code=status.HTTP_201_CREATED)
-def create_shipment(payload: ShipmentCreate, response: Response) -> Shipment:
-    for shape in store.values():
-        if shape.order_id == payload.order_id:
-            raise HTTPException(status_code=418, detail="Order_id is already created")
-    
-    shipmentCreate = Shipment(
-        id=str(uuid4()),
-        order_id=payload.order_id,
-        destination=payload.destination,
-        status='created'
-    )
-    store[shipmentCreate.id] = shipmentCreate
-    response.headers["Location"] = f"/shipments/{shipmentCreate.id}"
-    return shipmentCreate
+`frontend/index.html`
+
+`frontend/app.js`
+
+`frontend/styles.css`
+
+`frontend/Dockerfile`
+
+`frontend/.dockerignore`
+
+### 3.3. Reverse proxy
+
+`proxy/nginx.conf`:
+
+```nginx
+server {
+    listen 80;
+    server_name _;
+
+    location /api/ {
+        # Завершающий / удаляет префикс /api/:
+        # /api/shipments -> backend:8000/shipments
+        proxy_pass http://backend:8000/;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://frontend:80;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
 ```
 
-## 5. HTTPS и TLS termination
-Для запуска по HTTPS сгенерирован самоподписанный сертификат:
+### 3.4. Переменные окружения
+
+`.env.example` — коммитится в репозиторий:
+
+```env
+POSTGRES_DB=appdb
+POSTGRES_USER=appuser
+POSTGRES_PASSWORD=change_me
+APP_PORT=8080
+```
+
+В Codespaces создайте `.env` на основе примера и замените пароль:
+
 ```bash
->> mkdir -p certs
-
->> openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
- -keyout certs/dev-key.pem -out certs/dev-cert.pem \
- -subj "/CN=localhost" \
- -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
-
->> chmod 600 certs/dev-key.pem
+cp .env.example .env
 ```
-Сервис запущен с флагами `--ssl-keyfile` и `--ssl-certfile` на порту 8443. Проверка осуществляется командой `curl -k -v https://127.0.0.1:8443/docs`. Флаг `-k` используется только для учебного самоподписанного сертификата.
 
+`.gitignore`:
 
-## 6. Тестирование
+```gitignore
+.env
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+```
 
-Тесты проверяют не только JSON, но и HTTP-контракт. Хранилище восстанавливается fixtureфункцией, чтобы тесты не зависели от порядка.
+### 3.5. Docker Compose
 
-![alt text](docs/Test.png)
+`compose.yaml`:
 
-## 7. Ответы на контрольные вопросы
+```yaml
+name: lab3
 
-1. **Уровни OSI:** HTTP — прикладной (7), TLS — представления (6), TCP — транспортный (4), IP — сетевой (3).
-2. **URI, IP, порт:** URI идентифицирует ресурс, IP — узел в сети, порт — конкретный процесс на узле.
-3. **HTTP-сообщение:** Запрос состоит из метода, URI, версии, заголовков и тела. Ответ — из кода статуса, заголовков и тела.
-4. **GET vs POST:** GET безопасен (не меняет состояние) и идемпотентен (повторные вызовы дают тот же результат). POST создает ресурсы и обычно не идемпотентен.
-5. **Коды 400, 404, 409, 422:** 400 — противоречивые параметры; 404 — ресурс не найден; 409 — конфликт с текущим состоянием; 422 — ошибка валидации Pydantic.
-6. **Location в 201:** Указывает клиенту URI только что созданного ресурса (принцип REST).
-7. **PATCH vs PUT:** PATCH изменяет только переданные поля, PUT заменяет ресурс целиком.
-8. **Stateful vs Stateless:** Статус `created` хранится в ресурсе (в БД/памяти), а не в сессии клиента, поэтому REST остается stateless.
-9. **TLS:** Защищает от прослушивания и подмены (конфиденциальность, целостность, аутентификация сервера). Не защищает от ошибок в бизнес-логике приложения.
-10. **curl -k:** Отключает проверку сертификата, что делает соединение уязвимым для MITM-атак. Недопустимо в production.
-11. **OpenAPI:** FastAPI генерирует спецификацию из Pydantic-моделей и декораторов. Swagger UI визуализирует её.
-12. **X-Request-ID:** Позволяет отследить путь одного запроса через логи нескольких микросервисов.
-13. **TLS Termination:** Passthrough — на бэкенде; Edge — на прокси (Nginx); Bridging — на прокси и бэкенде.
-14. **X-Forwarded-*:** Клиент может подделать эти заголовки. Доверять им можно только от известного reverse proxy.
-15. **HTTP между Nginx и FastAPI:** Допустим на localhost или в изолированной доверенной сети. В остальных случаях требуется повторное шифрование (TLS bridging).
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-## 8. NGINX
+  backend:
+    build: ./backend
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+    expose:
+      - "8000"
+    networks:
+      - edge
+      - data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
-**Балансировка и запуск**
+  frontend:
+    build: ./frontend
+    expose:
+      - "80"
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/ >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
-1.
+  proxy:
+    image: nginx:stable-alpine
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - edge
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/ >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
-Каким-то чудом установил nginx на codespace
+networks:
+  edge:
+  data:
 
-2.
+volumes:
+  pgdata:
+```
 
-sudo nginx -t
+## 4. Запуск в GitHub Codespaces
 
-sudo nginx
+1. Откройте репозиторий в Codespaces.
+2. Проверьте Docker Compose:
 
-nano /etc/nginx/nginx.conf
+```bash
+docker compose version
+```
 
-3.
+3. Создайте `.env`:
 
-uvicorn main:app --host 127.0.0.1 --port 8000 \
- --proxy-headers --forwarded-allow-ips=127.0.0.1
+```bash
+cp .env.example .env
+```
 
-4.
+4. Проверьте итоговую конфигурацию:
 
-uvicorn main:app --host 127.0.0.1 --port 8001 \
- --proxy-headers --forwarded-allow-ips=127.0.0.1
+```bash
+docker compose config
+```
 
-5.
+5. Соберите и запустите:
 
-curl -k -v https://127.0.0.1:8443/health
+```bash
+docker compose build
+docker compose up -d
+```
+
+6. Проверьте контейнеры:
+
+```bash
+docker compose ps
+```
+
+Должно быть ровно 4 контейнера: `db`, `backend`, `frontend`, `proxy`.
+
+7. В Codespaces откройте вкладку **Ports**, найдите порт `8080` и нажмите **Open in Browser**.  
+   Внутри терминала Codespace можно проверять через `localhost`:
+
+```bash
+curl -i http://localhost:8080/
+curl -i http://localhost:8080/api/shipments
+```
+
+Если порт `8080` занят, измените `APP_PORT` в `.env`.
+
+## 5. Проверка и приёмочные сценарии
+
+Проверка Nginx и БД:
+
+```bash
+docker compose exec proxy nginx -t
+docker compose exec db pg_isready -U appuser -d appdb
+```
+
+Сквозной сценарий через proxy:
+
+```bash
+# 1. Список
+curl -i http://localhost:8080/api/shipments
+
+# 2. Создание
+curl -i -X POST http://localhost:8080/api/shipments \
+  -H 'Content-Type: application/json' \
+  -d '{"order_id":"order-100","destination":"Москва, склад 1"}'
+
+# 3. Предметная команда dispatch
+# подставьте id из ответа создания
+curl -i -X POST http://localhost:8080/api/shipments/<ID>/dispatch
+```
+
+В браузере через forwarded URL:
+- список отображается;
+- создание добавляет запись;
+- кнопка «Отправить» меняет `created → in_transit`;
+- после успешной операции список обновляется без ручного изменения URL;
+- ошибки и пустой список отображаются.
+
+Проверка изоляции:
+
+```bash
+docker compose ps
+docker inspect lab3-proxy-1 --format '{{json .NetworkSettings.Networks}}'
+docker inspect lab3-db-1 --format '{{json .NetworkSettings.Networks}}'
+```
+
+Ожидается:
+- `proxy` и `frontend` не входят в `data`;
+- `db` не входит в `edge`;
+- только `proxy` имеет опубликованный порт.
+
+## 6. Доказательство персистентности
+
+1. Создайте отправление через UI или `curl`.
+2. Перезапустите backend:
+
+```bash
+docker compose restart backend
+```
+
+3. Проверьте, что запись осталась:
+
+```bash
+curl http://localhost:8080/api/shipments
+```
+
+4. Пересоздайте контейнеры без удаления тома:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+5. Снова проверьте список — данные должны сохраниться.
+
+6. `docker compose down -v` удаляет том. Выполняйте только после фиксации доказательств:
+
+```bash
+docker compose down -v
+```
+
+## 7. Обнаруженная ошибка и диагностика
+
+**Симптом:** `502 Bad Gateway` или `404` при запросе `/api/shipments`.
+
+**Вероятная причина:** в `proxy/nginx.conf` указан `proxy_pass http://backend:8000;` без завершающего `/`. Тогда backend получает `/api/shipments`, а не `/shipments`.
+
+**Диагностика:**
+
+```bash
+docker compose logs --tail=100 proxy
+docker compose exec proxy nginx -t
+docker compose logs --tail=100 backend
+curl -i http://localhost:8080/api/shipments
+```
+
+**Исправление:** использовать `proxy_pass http://backend:8000/;` с завершающим `/`, перезапустить proxy:
+
+```bash
+docker compose restart proxy
+```
+
+Другая частая ошибка — `DB_HOST=localhost` в backend. В контейнере `localhost` указывает на сам backend, поэтому используется `DB_HOST=db`.
+
+## 8. Ответы на контрольные вопросы
+
+1. **Образ и контейнер.** Образ — неизменяемый шаблон со слоями; контейнер — процесс из образа с собственным writable-слоем. Изменяемое состояние контейнера хранится в writable-слое; данные БД выносятся в том.
+2. **0.0.0.0 vs 127.0.0.1.** `0.0.0.0` — слушать все интерфейсы контейнера, чтобы запросы из сети Docker доходили. `127.0.0.1` доступен только внутри самого контейнера.
+3. **EXPOSE vs ports/-p.** `EXPOSE` документирует порт образа, но не публикует его на хост. `ports` в Compose и `-p` в `docker run` публикуют порт на хост.
+4. **Почему `db`, а не `localhost`.** Backend и PostgreSQL находятся в разных контейнерах. В пользовательской bridge-сети имя `db` разрешается через DNS Docker. `localhost` внутри backend — это сам backend.
+5. **Пользовательская bridge-сеть.** Даёт DNS-имена контейнеров, изоляцию и предсказуемое взаимодействие по именам сервисов.
+6. **Зачем `edge` и `data`.** `edge` — внешний трафик proxy/frontend/backend; `data` — только backend и db. Это уменьшает поверхность доступа: proxy и frontend не видят БД.
+7. **Volume vs bind mount.** Именованный volume управляется Docker и не зависит от пути хоста. Bind mount монтирует конкретный путь хоста.
+8. **Почему удаление db не удаляет данные.** Данные PostgreSQL лежат в именованном томе `pgdata`, а не в writable-слое контейнера.
+9. **Когда применяются POSTGRES_*.** При первой инициализации пустого data directory. Если том уже создан, новые значения не переинициализируют пароль.
+10. **Почему `.env` не хранилище секретов.** Это обычный файл с открытым текстом; он удобен локально, но не обеспечивает управление доступом и аудит. Для production нужны secrets.
+11. **Завершающий `/` в `proxy_pass`.** Он заменяет совпавшую часть URI: `/api/shipments` → `/shipments`. Без `/` префикс `/api/` сохранился бы.
+12. **Same-origin и CORS.** Браузер обращается к тому же origin `http://localhost:8080`, а Nginx проксирует `/api/` на backend. CORS не нужен.
+13. **`depends_on` без healthcheck.** Ждёт только создания/запуска контейнера, но не готовности приложения. Поэтому для db нужен `pg_isready`, для backend — healthcheck.
+14. **Liveness и readiness.** `/health/live` проверяет, что процесс жив, без БД. `/health/ready` выполняет `SELECT 1` и показывает готовность принимать трафик.
+15. **Как доказать, что опубликован только proxy.** `docker compose ps` и `docker inspect` показывают `PublishedPort` только у proxy; `docker port` для backend/db не даёт публикаций.
+16. **Что переносится из ручного запуска в Compose.** Флаги `docker run` переходят в поля сервиса: `image/build`, `environment`, `ports`, `volumes`, `networks`, `depends_on`, `healthcheck`, `command`.
 
 ## 9. Вывод
-В ходе Лабораторной работы №2 был расширен функционал сервиса отправлений. Реализованы query-фильтры для коллекции, частичное изменение ресурса через PATCH и корректная обработка создания ресурса с заголовком `Location`. 
 
-Сервис успешно запущен по HTTPS с использованием самоподписанного сертификата. Написаны и пройдены автотесты, подтверждающие соблюдение HTTP-контракта.
+В ходе ЛР №3 приложение контейнеризировано и переведено на SQL-хранилище PostgreSQL. REST-контракт ЛР №2 сохранён: URI, методы, DTO, коды ответов и переходы статусов. Backend получает параметры подключения только из окружения, использует SQLAlchemy 2.x и psycopg, реализует `/health/live` и `/health/ready`. Frontend обращается к API только по относительному `/api/...`, Nginx является единственной внешней точкой входа на порту `8080`. Docker Compose описывает четыре сервиса, две сети, именованный том и healthcheck-зависимости. Данные сохраняются после пересоздания контейнеров; ручной запуск и декларативная оркестрация отличаются воспроизводимостью и управляемостью.
