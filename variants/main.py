@@ -41,11 +41,12 @@ class ShipmentCreate(BaseModel):
 class Shipment(ShipmentCreate):
     id: str
     status: Literal["created", "in_transit", "delivered"] = "created"
+    tracking_code : str | None
 
 
 
 store: dict[str, Shipment] = {
-    "shipment-001": Shipment(id="shipment-001", order_id="order-77", destination="Москва, Зеленоград")
+    "shipment-001": Shipment(id="shipment-001", order_id="order-77", destination="Москва, Зеленоград", tracking_code="temp")
 }
 
 @app.middleware("http")
@@ -67,6 +68,7 @@ def health() -> dict[str, str]:
 def list_shipments(
     status: Annotated[ShipmentStatus | None, Query()] = None,
     order_id: Annotated[str | None, Query()] = None,
+    tracking_code: Annotated[str | None, Query()] = None,
 ) -> list[Shipment]:
     shipments = list(store.values())
     if status is not None:
@@ -74,6 +76,9 @@ def list_shipments(
 
     if order_id is not None:
         return [s for s in shipments if s.order_id == order_id]
+
+    if tracking_code is not None:
+        return [s for s in shipments if s.tracking_code == tracking_code]
 
     return shipments
 
@@ -96,7 +101,8 @@ def create_shipment(payload: ShipmentCreate, response: Response) -> Shipment:
         id = str(uuid4()),
         order_id = payload.order_id,
         destination = payload.destination,
-        status = 'created'
+        status = 'created',
+        tracking_code = '?'
     )
 
     store[shipmentCreate.id]=shipmentCreate

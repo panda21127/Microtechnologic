@@ -12,7 +12,8 @@ def clear() -> None:
         id = "shipment-001",
         order_id = "order-77",
         destination = "Москва, Зеленоград",
-        status = 'created'
+        status = 'created',
+        tracking_code = "test"
     )
     yield
     store.clear()
