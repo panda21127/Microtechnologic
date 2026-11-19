@@ -91,34 +91,9 @@ def to_dto(row: ShipmentORM) -> Shipment:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import socket
-    print(f"LIFESPAN: DB target {DB_HOST}:{DB_PORT}/{DB_NAME} user={DB_USER}", flush=True)
-
-    try:
-        ip = socket.gethostbyname(DB_HOST)
-        print(f"LIFESPAN: DNS OK {DB_HOST} -> {ip}", flush=True)
-    except Exception as exc:
-        print(f"LIFESPAN: DNS FAILED {exc}", flush=True)
-        raise
-
-    try:
-        s = socket.create_connection((DB_HOST, int(DB_PORT)), timeout=5)
-        s.close()
-        print("LIFESPAN: TCP OK", flush=True)
-    except Exception as exc:
-        print(f"LIFESPAN: TCP FAILED {exc}", flush=True)
-        raise
-
-    try:
-        print("LIFESPAN: create_all ->", flush=True)
-        Base.metadata.create_all(bind=engine)
-        print("LIFESPAN: create_all OK", flush=True)
-    except Exception as exc:
-        print(f"LIFESPAN: create_all FAILED {type(exc).__name__}: {exc}", flush=True)
-        raise
-
+    Base.metadata.create_all(engine)
     yield
-    print("LIFESPAN: shutdown", flush=True)
+    engine.dispose()
 
 
 app = FastAPI(title=SERVICE_NAME, version=SERVICE_VERSION, lifespan=lifespan)
